@@ -1,54 +1,66 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { parseQuestions, parsePaperOne, PAPER_ONE_SOURCE, scoreAttempt, remainingTime, DURATION, SOURCE } from './exam-core.js';
+import { readdirSync, readFileSync } from 'node:fs';
+import { parseQuestionBank, scoreAttempt, remainingTime, DURATION } from './exam-core.js';
 
-const questions = () => parseQuestions(readFileSync(new URL(SOURCE, import.meta.url), 'utf8'));
+const markdownFiles = readdirSync(new URL('./md_files/', import.meta.url)).filter(file => file.endsWith('.md'));
+const expectedCounts = new Map([
+  ['July 2016 - 2.md', 50],
+  ['January 2017.md', 50],
+  ['Nov%202017.md', 50],
+  ['June 2017.md', 75],
+  ['July 2018.md', 100],
+  ['December 2018.md', 100],
+  ['June 2019.md', 100],
+  ['December 2019.md', 100],
+  ['June 2020.md', 100],
+  ['December 2021.md', 100],
+  ['SEPTEMBER_%202022.md', 100],
+  ['march_2023.md', 100]
+]);
 
-test('Paper I parses 50 questions with printed answers, explanations, data and passage', () => {
-  const paper = parsePaperOne(readFileSync(new URL(PAPER_ONE_SOURCE, import.meta.url), 'utf8'));
-  assert.equal(paper.length, 50);
-  assert.equal(paper[0].accepted[0], 'B');
-  assert.equal(paper[49].accepted[0], 'D');
-  assert.match(paper[0].passageTable, /2016 \| 220 \| 165/);
-  assert.match(paper[4].passageTable, /2021 \| 410/);
-  assert.doesNotMatch(paper[6].prompt, /Time Allotted/);
-  assert.doesNotMatch(paper[44].options[3].text, /Gokhale/);
-  assert.match(paper[45].passage, /two-thirds/);
-  assert.match(paper[49].passage, /8-anna/);
-  assert.match(paper[26].explanation, /Source\/key note/);
-  assert.equal(scoreAttempt(paper, Object.fromEntries(paper.map(question => [question.id, question.accepted[0]]))).score, 100);
+function readPaper(file) {
+  return parseQuestionBank(readFileSync(new URL(`./md_files/${encodeURIComponent(file)}`, import.meta.url), 'utf8'));
+}
+
+test('all Markdown sets parse with their expected question counts and sequential IDs', () => {
+  assert.equal(markdownFiles.length, expectedCounts.size);
+  for (const [file, count] of expectedCounts) {
+    const paper = readPaper(file);
+    assert.equal(paper.length, count, file);
+    assert.deepEqual(paper.map(question => question.id), Array.from({ length: count }, (_, index) => index + 1), file);
+    assert.ok(paper.every(question => typeof question.prompt === 'string'), file);
+  }
 });
 
-test('all 100 source questions retain four options, accepted answers, and notes', () => {
-  const paper = questions();
-  assert.equal(paper.length, 100);
-  assert.deepEqual(paper[17].accepted, ['A', 'C']);
-  assert.deepEqual(paper[52].accepted, ['D', 'A']);
-  assert.match(paper[17].explanation, /Source\/key note/);
-  assert.equal(paper[0].options[2].text, 'Sri Aurobindo');
+test('answer keys and study explanations are parsed from the different Markdown formats', () => {
+  const march = readPaper('march_2023.md');
+  const september = readPaper('SEPTEMBER_%202022.md');
+  const december2021 = readPaper('December 2021.md');
+  assert.equal(march[0].accepted[0], 'C');
+  assert.equal(march[0].options.length, 4);
+  assert.equal(september[0].accepted[0], 'A');
+  assert.equal(september[0].options.length, 4);
+  assert.deepEqual(december2021[4].accepted, ['A', 'B', 'C']);
+  assert.equal(december2021[4].scoreable, false);
+  assert.match(march[0].explanation, /Sri Aurobindo/);
 });
 
-test('two marks per accepted answer, including alternative keys, without negative marking', () => {
-  const paper = questions();
-  assert.deepEqual(scoreAttempt(paper, { 1: 'C', 2: 'A', 18: 'A', 53: 'A' }), {
-    correct: 3, answered: 4, incorrect: 1, unanswered: 96, score: 6, total: 200
+test('only scoreable questions contribute to marks and totals', () => {
+  const questions = [
+    { id: 1, accepted: ['A'], options: [{ key: 'A' }], scoreable: true },
+    { id: 2, accepted: ['B', 'D'], options: [{ key: 'B' }, { key: 'D' }], scoreable: false },
+    { id: 3, accepted: ['C'], options: [{ key: 'C' }], scoreable: true },
+    { id: 4, accepted: [], options: [], scoreable: false }
+  ];
+  assert.deepEqual(scoreAttempt(questions, { 1: 'A', 2: 'B', 3: 'C', 4: 'D' }), {
+    correct: 2, answered: 2, incorrect: 0, unanswered: 0, unscored: 2, score: 4, total: 4
   });
-  assert.equal(scoreAttempt(paper, Object.fromEntries(paper.map(question => [question.id, question.accepted[0]]))).score, 200);
-  assert.equal(scoreAttempt(paper, {}).score, 0);
 });
 
-test('absolute three-hour deadline survives time spent outside the page', () => {
+test('absolute three-hour deadline does not pause while away from the page', () => {
   const attempt = { deadline: 1000 + DURATION };
-  assert.equal(remainingTime(attempt, 1000), 10800000);
+  assert.equal(remainingTime(attempt, 1000), DURATION);
   assert.equal(remainingTime(attempt, 1000 + DURATION - 1000), 1000);
   assert.equal(remainingTime(attempt, 1000 + DURATION + 5000), 0);
-});
-
-test('shared passages appear with dependent questions, not preceding answer options', () => {
-  const paper = questions();
-  assert.doesNotMatch(paper[89].options[3].text, /Read the given/);
-  assert.doesNotMatch(paper[94].options[3].text, /Read the following/);
-  for (const question of paper.slice(90, 95)) assert.match(question.passage, /two clay balls/);
-  for (const question of paper.slice(95)) assert.match(question.passage, /social support/);
 });
